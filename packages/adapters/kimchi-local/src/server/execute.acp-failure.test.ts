@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { KimchiEngineSelection } from "./acp.js";
 
 const { executeAcp, resolveEngine } = vi.hoisted(() => ({
   executeAcp: vi.fn(async () => { throw new Error("ACP session startup failed"); }),
-  resolveEngine: vi.fn(async () => ({ engine: "acp", explicit: false })),
+  resolveEngine: vi.fn(async (_input: unknown): Promise<KimchiEngineSelection> => ({ engine: "acp", explicit: false })),
 }));
 
 vi.mock("./acp.js", () => ({
