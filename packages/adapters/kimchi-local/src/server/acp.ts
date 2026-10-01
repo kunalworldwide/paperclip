@@ -349,15 +349,15 @@ export async function testKimchiAcpEnvironment(
 
   // Resolvability only proves the binary's first token exists on PATH. Probe
   // the real CLI so an old or broken installation fails "Test Environment"
-  // here instead of failing the first heartbeat.
-  if (
-    commandResolvable &&
-    checks.every((check) => check.code !== "kimchi_acp_cwd_invalid")
-  ) {
+  // here instead of failing the first heartbeat. Quoted or compound command
+  // overrides cannot be probed without a shell, so they skip with a note
+  // instead of failing the spawn.
+  const probeExecutable = firstShellToken(command);
+  if (commandResolvable && probeExecutable) {
     const versionProbe = await runAdapterExecutionTargetProcess(
       `kimchi-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       target,
-      firstShellToken(command) ?? command,
+      probeExecutable,
       ["--version"],
       {
         cwd,
@@ -370,10 +370,24 @@ export async function testKimchiAcpEnvironment(
     const versionLine =
       firstNonEmptyLine(versionProbe.stdout) || firstNonEmptyLine(versionProbe.stderr);
     if (!versionProbe.timedOut && (versionProbe.exitCode ?? 1) === 0) {
+      // Kimchi v0.0.7 is the first release that accepts `--mode acp`; when
+      // the reported version is recognizable and older, say so now rather
+      // than failing the first heartbeat.
+      const semverMatch = versionLine.match(/(\d+)\.(\d+)\.(\d+)/);
+      const versionTooOld =
+        semverMatch !== null &&
+        (Number(semverMatch[1]) > 0
+          ? false
+          : Number(semverMatch[2]) < 0 || (Number(semverMatch[2]) === 0 && Number(semverMatch[3]) < 7));
       checks.push({
-        code: "kimchi_acp_version_detected",
-        level: "info",
+        code: versionTooOld ? "kimchi_acp_version_too_old" : "kimchi_acp_version_detected",
+        level: versionTooOld ? "warn" : "info",
         message: `Kimchi CLI detected${versionLine ? `: ${versionLine.replace(/\s+/g, " ").trim().slice(0, 120)}` : "."}`,
+        ...(versionTooOld
+          ? {
+              hint: "Kimchi v0.0.7 is the first ACP release; this binary predates `--mode acp` support. Upgrade the Kimchi CLI.",
+            }
+          : {}),
       });
     } else {
       checks.push({
@@ -386,6 +400,14 @@ export async function testKimchiAcpEnvironment(
         ...(versionLine ? { detail: versionLine } : {}),
       });
     }
+  } else if (commandResolvable) {
+    checks.push({
+      code: "kimchi_acp_version_probe_skipped",
+      level: "info",
+      message: "Skipped the CLI version probe because the command override is quoted or compound.",
+      detail: command,
+      hint: "The probe spawns the executable directly; verify the installed Kimchi version manually (v0.0.7 is the first ACP release).",
+    });
   }
 
   // KIMCHI_API_KEY is the env-auth path. Kimchi also supports browser/
