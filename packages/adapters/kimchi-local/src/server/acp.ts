@@ -406,9 +406,13 @@ export async function testKimchiAcpEnvironment(
     checks.push({
       code: "kimchi_acp_version_probe_skipped",
       level: "info",
-      message: "Skipped the CLI version probe because the command override is quoted or compound.",
-      detail: command,
-      hint: "The probe spawns the executable directly; verify the installed Kimchi version manually (v0.0.7 is the first ACP release).",
+      message: cwdCheckFailed
+        ? "Skipped the CLI version probe because the working directory is not usable."
+        : "Skipped the CLI version probe because the command override is quoted or compound.",
+      detail: cwdCheckFailed ? cwd : command,
+      hint: cwdCheckFailed
+        ? "Fix the working directory above; the Kimchi version is checked once it is usable."
+        : "The probe spawns the executable directly; verify the installed Kimchi version manually (v0.0.7 is the first ACP release).",
     });
   }
 
