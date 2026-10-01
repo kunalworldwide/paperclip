@@ -2,13 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 
 const ensureDirectoryMock = vi.hoisted(() => vi.fn(async () => {}));
 const readTargetMock = vi.hoisted(() => vi.fn(() => ({ kind: "local" })));
+const runProcessMock = vi.hoisted(() =>
+  vi.fn(async () => ({ exitCode: 0, timedOut: false, stdout: "kimchi 0.1.0\n", stderr: "" })),
+);
 
 vi.mock("@paperclipai/adapter-utils/execution-target", () => ({
   describeAdapterExecutionTarget: () => "local",
   ensureAdapterExecutionTargetCommandResolvable: ensureDirectoryMock,
+  ensureAdapterExecutionTargetDirectory: vi.fn(async () => {}),
   readAdapterExecutionTarget: readTargetMock,
   resolveAdapterExecutionTargetCwd: (_target: unknown, configuredCwd: string, fallbackCwd: string) =>
     configuredCwd || fallbackCwd,
+  runAdapterExecutionTargetProcess: runProcessMock,
 }));
 
 import { testEnvironment } from "./test.js";

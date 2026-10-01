@@ -10,8 +10,10 @@ import type {
 } from "@paperclipai/adapter-utils";
 import {
   ensureAdapterExecutionTargetCommandResolvable,
+  ensureAdapterExecutionTargetDirectory,
   readAdapterExecutionTarget,
   resolveAdapterExecutionTargetCwd,
+  runAdapterExecutionTargetProcess,
 } from "@paperclipai/adapter-utils/execution-target";
 import {
   DEFAULT_ACP_ENGINE_MODE,
@@ -25,6 +27,7 @@ import {
   asString,
   parseObject,
 } from "@paperclipai/adapter-utils/server-utils";
+import { firstNonEmptyLine } from "./utils.js";
 import { DEFAULT_KIMCHI_LOCAL_MODEL } from "../index.js";
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -203,7 +206,14 @@ async function commandIsResolvable(
         token,
         target,
         resolveAdapterExecutionTargetCwd(target, asString(input?.config.cwd, ""), process.cwd()),
-        process.env,
+        // The probe only runs `command -v` inside the target. Passing the
+        // whole server environment here would forward every server secret to
+        // a remote sandbox the ACP run itself never inherits, so send only
+        // what a login shell needs to resolve the binary.
+        {
+          ...(process.env.PATH !== undefined ? { PATH: process.env.PATH } : {}),
+          ...(process.env.HOME !== undefined ? { HOME: process.env.HOME } : {}),
+        },
       );
       return true;
     } catch {
@@ -284,9 +294,18 @@ export async function testKimchiAcpEnvironment(
     });
   }
 
-  const cwd = asString(config.cwd, process.cwd());
+  // Resolve the directory inside the execution target: for remote targets
+  // the session runs in the target's remoteCwd, and creating/checking the
+  // path on the Paperclip host would both test the wrong filesystem and
+  // leave an unintended host directory behind.
+  const cwd = resolveAdapterExecutionTargetCwd(target, asString(config.cwd, ""), process.cwd());
+  const cwdRunId = `kimchi-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   try {
-    await fs.mkdir(cwd, { recursive: true });
+    await ensureAdapterExecutionTargetDirectory(cwdRunId, target, cwd, {
+      cwd,
+      env: {},
+      createIfMissing: true,
+    });
     checks.push({
       code: "kimchi_acp_cwd_valid",
       level: "info",
@@ -327,6 +346,47 @@ export async function testKimchiAcpEnvironment(
       ? undefined
       : "Install the Kimchi CLI (curl -fsSL https://github.com/getkimchi/kimchi/releases/latest/download/install.sh | bash) with ACP support, or set agentCommand to a valid Kimchi ACP server command.",
   });
+
+  // Resolvability only proves the binary's first token exists on PATH. Probe
+  // the real CLI so an old or broken installation fails "Test Environment"
+  // here instead of failing the first heartbeat.
+  if (
+    commandResolvable &&
+    checks.every((check) => check.code !== "kimchi_acp_cwd_invalid")
+  ) {
+    const versionProbe = await runAdapterExecutionTargetProcess(
+      `kimchi-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      target,
+      firstShellToken(command) ?? command,
+      ["--version"],
+      {
+        cwd,
+        env: {},
+        timeoutSec: 15,
+        graceSec: 5,
+        onLog: async () => {},
+      },
+    );
+    const versionLine =
+      firstNonEmptyLine(versionProbe.stdout) || firstNonEmptyLine(versionProbe.stderr);
+    if (!versionProbe.timedOut && (versionProbe.exitCode ?? 1) === 0) {
+      checks.push({
+        code: "kimchi_acp_version_detected",
+        level: "info",
+        message: `Kimchi CLI detected${versionLine ? `: ${versionLine.replace(/\s+/g, " ").trim().slice(0, 120)}` : "."}`,
+      });
+    } else {
+      checks.push({
+        code: "kimchi_acp_version_probe_failed",
+        level: "warn",
+        message: versionProbe.timedOut
+          ? "`kimchi --version` timed out."
+          : "`kimchi --version` did not exit cleanly.",
+        hint: "Kimchi v0.0.7 is the first ACP release; earlier binaries do not accept `--mode acp`.",
+        ...(versionLine ? { detail: versionLine } : {}),
+      });
+    }
+  }
 
   // KIMCHI_API_KEY is the env-auth path. Kimchi also supports browser/
   // subscription login inside the CLI; that state lives under
