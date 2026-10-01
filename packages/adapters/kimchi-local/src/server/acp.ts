@@ -351,9 +351,11 @@ export async function testKimchiAcpEnvironment(
   // the real CLI so an old or broken installation fails "Test Environment"
   // here instead of failing the first heartbeat. Quoted or compound command
   // overrides cannot be probed without a shell, so they skip with a note
-  // instead of failing the spawn.
+  // instead of failing the spawn. Skip the probe when the working directory
+  // check already failed so its diagnostic stays the actionable result.
   const probeExecutable = firstShellToken(command);
-  if (commandResolvable && probeExecutable) {
+  const cwdCheckFailed = checks.some((check) => check.code === "kimchi_acp_cwd_invalid");
+  if (commandResolvable && probeExecutable && !cwdCheckFailed) {
     const versionProbe = await runAdapterExecutionTargetProcess(
       `kimchi-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       target,
